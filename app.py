@@ -7,11 +7,11 @@ from datetime import datetime
 # --- CONFIGURATION ---
 MOT_DE_PASSE_ADMIN = "prof2025"
 FICHIER_SCORES = "scores_classe.csv"
+VIES_INITIALES = 5 # NOUVELLE RÈGLE : 5 chances pour faire le meilleur score
 
 # --- GESTION DE LA BASE DE DONNÉES (FICHIER CSV PARTAGÉ) ---
 def init_db():
     if not os.path.exists(FICHIER_SCORES):
-        # On crée un fichier vide avec les colonnes
         df = pd.DataFrame(columns=["Date", "Nom", "Score"])
         df.to_csv(FICHIER_SCORES, index=False)
 
@@ -25,7 +25,6 @@ def lire_scores():
 def sauvegarder_score(nom, score):
     init_db()
     df = pd.read_csv(FICHIER_SCORES)
-    # Ajout du nouveau score
     nouveau = pd.DataFrame({
         "Date": [datetime.now().strftime("%d/%m %H:%M")],
         "Nom": [nom],
@@ -58,13 +57,25 @@ def generer_question():
         txt, rep = f"{a} ÷ {b}", res
     return txt, rep
 
+# --- FONCTION DE REDÉMARRAGE DU JEU ---
+def redemarrer_jeu(nom_joueur):
+    st.session_state.score = 0
+    st.session_state.vies = VIES_INITIALES
+    st.session_state.partie_en_cours = True
+    st.session_state.q, st.session_state.r = generer_question()
+    st.session_state.msg = f"Bonne chance, {nom_joueur} !"
+    st.rerun()
+
 # --- INTERFACE WEB ---
 st.set_page_config(page_title="Maths Élites", page_icon="🎓")
 
-# Mémoire du jeu
+# Initialisation de la mémoire du jeu
 if 'score' not in st.session_state: st.session_state.score = 0
+if 'vies' not in st.session_state: st.session_state.vies = VIES_INITIALES
 if 'q' not in st.session_state: st.session_state.q, st.session_state.r = generer_question()
-if 'msg' not in st.session_state: st.session_state.msg = ""
+if 'msg' not in st.session_state: st.session_state.msg = "Entrez votre prénom pour commencer."
+if 'partie_en_cours' not in st.session_state: st.session_state.partie_en_cours = False
+
 
 # --- VOLET ADMIN (Barre latérale gauche) ---
 with st.sidebar:
@@ -74,13 +85,11 @@ with st.sidebar:
     if pwd == MOT_DE_PASSE_ADMIN:
         st.success("Admin Connecté")
         st.write("---")
-        st.subheader("📋 Historique Complet des Élèves")
+        st.subheader("📋 Historique Complet")
         
         df_admin = lire_scores()
-        # Affiche le tableau complet (Date, Nom, Score)
         st.dataframe(df_admin, use_container_width=True)
         
-        # Bouton pour télécharger en Excel/CSV
         csv = df_admin.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Télécharger CSV", csv, "scores_eleves.csv", "text/csv")
         
@@ -96,47 +105,64 @@ st.title("🎓 DÉFI MATHS - Prof. Ayari")
 nom = st.text_input("Entre ton Prénom pour jouer :")
 
 if nom:
-    tab1, tab2 = st.tabs(["🎮 JOUER", "🏆 CLASSEMENT DE LA CLASSE"])
+    # Si la partie n'a pas commencé, affiche le bouton de démarrage
+    if not st.session_state.partie_en_cours:
+        st.info(f"Bonjour {nom} ! Tu as {VIES_INITIALES} vies. Fais le meilleur score possible !")
+        if st.button("Démarrer le Défi"):
+            redemarrer_jeu(nom)
+            
+    # Si la partie est terminée (0 vie)
+    elif st.session_state.vies <= 0:
+        st.error(f"Partie Terminée ! Ton score final est : {st.session_state.score}")
+        st.session_state.partie_en_cours = False
+        
+        if st.button("Rejouer"):
+            redemarrer_jeu(nom)
 
-    # ONGLET 1 : LE JEU
-    with tab1:
-        st.write("---")
-        col1, col2 = st.columns(2)
-        col1.metric("Score Actuel", st.session_state.score)
-        
-        st.header(f"Calcul : {st.session_state.q} = ?")
-        
-        with st.form("jeu"):
-            rep_eleve = st.number_input("Réponse :", step=1)
-            if st.form_submit_button("Valider"):
+    # Si la partie est en cours
+    else:
+        tab1, tab2 = st.tabs(["🎮 JEU ACTUEL", "🏆 CLASSEMENT"])
+
+        with tab1:
+            st.write("---")
+            col1, col2 = st.columns(2)
+            col1.metric("Score", st.session_state.score)
+            col2.metric("Vies restantes", st.session_state.vies)
+            
+            st.subheader(f"Calcul : {st.session_state.q} = ?")
+            
+            with st.form("jeu"):
+                rep_eleve = st.number_input("Ta réponse :", step=1)
+                bouton_valider = st.form_submit_button("Valider")
+                
+            if bouton_valider:
                 if rep_eleve == st.session_state.r:
                     st.session_state.score += 1
-                    st.session_state.msg = "✅ BRAVO !"
-                    # SAUVEGARDE AUTOMATIQUE DU SCORE DANS L'HISTORIQUE COMMUN
-                    sauvegarder_score(nom, st.session_state.score)
+                    st.session_state.msg = "✅ Bonne Réponse !"
+                    # On sauvegarde le score à chaque point marqué
+                    sauvegarder_score(nom, st.session_state.score) 
                 else:
-                    st.session_state.msg = f"❌ FAUX ! C'était {st.session_state.r}"
+                    st.session_state.vies -= 1
+                    st.session_state.msg = f"❌ Faux ! C'était {st.session_state.r}. Tu as perdu une vie."
                 
-                st.session_state.q, st.session_state.r = generer_question()
+                # Prochaine question si les vies ne sont pas à zéro
+                if st.session_state.vies > 0:
+                    st.session_state.q, st.session_state.r = generer_question()
                 st.rerun()
 
-        if st.session_state.msg: st.info(st.session_state.msg)
+            if st.session_state.msg: st.info(st.session_state.msg)
 
-    # ONGLET 2 : CLASSEMENT PUBLIC
-    with tab2:
-        st.subheader("🏆 Les Champions de la Classe")
-        df_public = lire_scores()
-        
-        if not df_public.empty:
-            # On prend le MEILLEUR score de chaque élève pour le classement
-            classement = df_public.groupby("Nom")["Score"].max().reset_index()
-            # On trie du plus grand au plus petit
-            classement = classement.sort_values(by="Score", ascending=False).head(15)
-            # On affiche (sans la date, juste Nom et Score)
-            classement.index = range(1, len(classement) + 1)
-            st.table(classement)
-        else:
-            st.info("Aucun match joué pour l'instant.")
+        with tab2:
+            st.subheader("🏆 Meilleurs Scores de la Classe")
+            df_public = lire_scores()
+            if not df_public.empty:
+                # Affichage du Top 10
+                classement = df_public.groupby("Nom")["Score"].max().reset_index()
+                classement = classement.sort_values(by="Score", ascending=False).head(10)
+                classement.index = range(1, len(classement) + 1)
+                st.table(classement)
+            else:
+                st.info("Aucun match joué pour l'instant.")
 
 else:
-    st.info("👋 Écris ton prénom ci-dessus pour commencer.")
+    st.info("👋 Écris ton prénom pour commencer.")
